@@ -56,94 +56,16 @@ export function inferTypeLit(lit: Literal): Type {
   }
 }
 
-// function isSubtypeFields(t1fields: Map<string, Type>,
-//                          t2fields: Map<string, Type>,
-//                          globEnv: GlobalTypeEnv): boolean {
-//   // Check that t1fields is a subset of t2fields. We do this by iterating
-//   // through all the fields of t1 and check that t2 contains every one of
-//   // them.
-//   for (const [field, left] of t1fields.entries()) {
-//     if (!t2fields.has(field)) {
-//       return false
-//     }
-//     const right = t2fields.get(field);
-//     // Afterward, we check that the type of each corresponding field in t1 is
-//     // of a subtype of its t2 counterpart.
-//     if (!isSubtype(globEnv, left, right)) {
-//       return false
-//     }
-//   }
 
-//   return true
-// };
-
-
-// t : Counter = Counter()
-// class A(object):
-//     def m(self: A) -> A:
-// class B(object):
-//     def m(self:B ) -> B:
-
-// function isSubtypeMethods(t1methods: Map<string, [Type[], Type]>,
-//                           t2methods: Map<string, [Type[], Type]>,
-//                           globEnv: GlobalTypeEnv): boolean {
-//   // Check that t1methods is a subset of t2methods. We do this by iterating
-//   // through all the methods of t1 and check that t2 contains every one of
-//   // them
-//   for (const [method, [argTypes1, retType1]] of t1methods.entries()) {
-//     if (!t2methods.has(method)) {
-//       return false
-//     }
-//     // Afterward, we check that the arguement types of each corresponding
-//     // method in t1 is of a subtype of that of its t2 counterpart.
-//     const [argTypes2, retType2] = t2methods.get(method);
-//     for (const [i, [left, right]] of argTypes1.map((t, i) => [t, argTypes2[i]]).entries()) {
-//       if (i == 0) {
-//         continue
-//       } else {
-//         if (!isSubtype(globEnv, left, right)) {
-//           return false
-//         }
-//       }
-//     }
-//     // We also check that the return type of t1 is a subtype of that of t2.
-//     if (!isSubtype(globEnv, retType1, retType2)) {
-//       return false
-//     }
-//   }
-//   return true
-// }
 
 // check if t1 is a subtype of t2
 export function isSubtype(globEnv: GlobalTypeEnv, t1: Type, t2: Type): boolean {
   if (t1.tag == "none") {
     return t2.tag == "class";
-  // } else if (t1.tag == "open-object" && t2.tag == "open-object") {
-  //   return isSubtypeFields(t1.fields, t2.fields, globEnv)
-  //       && isSubtypeMethods(t1.methods, t2.methods, globEnv);
-  // } else if (t1.tag == "open-object" && t2.tag == "class") {
-  //   const [t2fields, t2methods] = globEnv.classes.get(t2.name);
-  //   return isSubtypeFields(t1.fields, t2fields, globEnv)
-  //       && isSubtypeMethods(t1.methods, t2methods, globEnv);
-  // } else if (t1.tag == "class" && t2.tag == "open-object") {
-  //   const [t1fields, t1methods] = globEnv.classes.get(t1.name);
-  //   return isSubtypeFields(t1fields, t2.fields, globEnv)
-  //       && isSubtypeMethods(t1methods, t2.methods, globEnv);
+
   } else if (t1.tag == "class" && t2.tag == "class") {
     return t1.name == t2.name;
-  //   if (t1.name == t2.name) {
-  //     return true
-  //   } else if (!globEnv.classes.has(t1.name)) {
-  //     throw new Error(`Unknown class: ${t1.name}`);
-  //   } else if (!globEnv.classes.has(t2.name)) {
-  //     throw new Error(`Unknown class: ${t2.name}`);
-  //   } else {
-  //     const [t1fields, t1methods] = globEnv.classes.get(t1.name);
-  //     const [t2fields, t2methods] = globEnv.classes.get(t2.name);
 
-  //     return isSubtypeFields(t1fields, t2fields, globEnv)
-  //         && isSubtypeMethods(t1methods, t2methods, globEnv);
-  //   }
   } else {
     return t1.tag == t2.tag
   }
@@ -154,75 +76,6 @@ export function isList(typ: Type): boolean {
   return typ.tag === "list";
 }
 
-enum joinStatus {
-  Success,
-  Failure
-}
-
-// // find the union of fields
-// function joinFields(leftFields: Map<string, Type>,
-//                     rightFields: Map<string, Type>,
-//                     globEnv: GlobalTypeEnv): [joinStatus, Map<string, Type>] {
-//   const fields = new Map(leftFields);
-//   for (const [field, type_] of rightFields.entries()) {
-//     if (!fields.has(field)) {
-//       fields.set(field, type_);
-//     } else {
-//       const leftType = fields.get(field);
-//       // intersection = 0
-//       if (!isSubtype(globEnv, leftType, type_) && !isSubtype(globEnv, type_, leftType)) {
-//         return [joinStatus.Failure, new Map];
-//       // if leftType is a subtype of type_, upcast the type, do nothing
-//       // otherwise
-//       } else if (isSubtype(globEnv, leftType, type_)) {
-//         fields.set(field, type_);
-//       }
-//     }
-//   }
-
-//   return [joinStatus.Success, fields];
-// }
-
-// // find the union of methods
-// function joinMethods(leftMethods: Map<string, [Type[], Type]>,
-//                      rightMethods: Map<string, [Type[], Type]>,
-//                      globEnv: GlobalTypeEnv): [joinStatus, Map<string, [Type[], Type]>] {
-//   const methods = new Map(leftMethods);
-//   for (const [method, [rightArgTypes, rightRetType]] of rightMethods.entries()) {
-//     if (!methods.has(method)) {
-//       methods.set(method, [rightArgTypes, rightRetType]);
-//     } else {
-//       const [leftArgTypes, leftRetType] = methods.get(method);
-//       // intersection = 0
-//       if (leftArgTypes.length != rightArgTypes.length) {
-//         return [joinStatus.Failure, new Map];
-//       } else if (!isSubtype(globEnv, leftRetType, rightRetType)
-//               && !isSubtype(globEnv, rightRetType, leftRetType)) {
-//         return [joinStatus.Failure, new Map];
-//       } else {
-//         let joinedArgTypes = [];
-//         for (const [i, leftArgType] of leftArgTypes.entries()) {
-//           const rightArgType = rightArgTypes[i];
-//           const joinedType = joinType(leftArgType, rightArgType, globEnv);
-//           if (joinedType === UNSAT) {
-//             return [joinStatus.Failure, new Map];
-//           } else {
-//             joinedArgTypes.push(joinedType);
-//           }
-//         }
-
-        // const joinedRetType = joinType(leftRetType, rightRetType, globEnv);
-        // if (joinedRetType === UNSAT) {
-        //   return [joinStatus.Failure, new Map];
-        // }
-
-  //       methods.set(method, [joinedArgTypes, joinedRetType]);
-  //     }
-  //   }
-  // }
-
-//   return [joinStatus.Success, methods];
-// }
 
 // For now, this joins two types even if they have fields/methods with different
 // types as long as they are compatible. This could be restricted later if it
@@ -236,44 +89,7 @@ export function joinType(leftType: Type, rightType: Type, globEnv: GlobalTypeEnv
           && rightType.tag == "class"
           && leftType.name == rightType.name) {
     return leftType
-  // } else if (leftType.tag == "class" && rightType.tag == "open-object"
-  //         || leftType.tag == "open-object" && rightType.tag == "class"
-  //         || leftType.tag == "open-object" && rightType.tag == "open-object") {
-  //   type OpenObj = {
-  //     tag: "open-object";
-  //     fields: Map<string, Type>;
-  //     methods: Map<string, [Array<Type>, Type]>
-  //   };
-  //   type Class = { tag: "class"; name: string };
-  //   type member = [Map<string, Type>, Map<string, [Array<Type>, Type]>];
 
-  //   const extractMembers = (t: OpenObj | Class, m: member) => {
-  //     if (t.tag == "class") {
-  //       if (globEnv.classes.has(t.name)) {
-  //         m = globEnv.classes.get(t.name);
-  //       } else {
-  //         throw new Error(`Unknown class: ${t.name}`);
-  //       }
-  //     } else {
-  //       m = [t.fields, t.methods];
-  //     }
-  //   };
-
-  //   let leftMembers: member;
-  //   let rightMembers: member;
-  //   extractMembers(leftType, leftMembers);
-  //   extractMembers(rightType, rightMembers);
-
-  //   const [leftFields, leftMethods] = leftMembers;
-  //   const [rightFields, rightMethods] = rightMembers;
-  //   const [s1, fields] = joinFields(leftFields, rightFields, globEnv);
-  //   const [s2, methods] = joinMethods(leftMethods, rightMethods, globEnv);
-
-  //   if (s1 === joinStatus.Failure || s2 === joinStatus.Failure) {
-  //     return UNSAT;
-  //   } else {
-  //     return { tag: "open-object", fields, methods };
-  //   }
   } else {
     if (leftType === rightType) {
       return leftType;
@@ -502,6 +318,52 @@ export function inferExprType(expr: Expr<any>, globEnv: GlobalTypeEnv, locEnv: L
       throw new Error(`Inference not implemented for expressions with tag: '${expr.tag}'`);
   }
 }
+
+
+// Annotates function definition in the AST, using local type inference.
+export function AnnotateFunDef(funDef: FunDef<any>, locEnv:LocalTypeEnv) : FunDef<Type> {
+
+  return funDef
+}
+
+// represents a constraint of two type variables t1 and t2
+type Constraint = [Type, Type]
+
+// traverses the function body and collects a mapping of all variable
+// names that occur in the function defintion
+function collectVariables(funDef: FunDef<any>) : Map<string, Type> {
+  let varTypeMap = new Map<string, Type>()
+
+  // collect all parameters and give them a type (from annotation or failedinfer placeholder)
+  funDef.parameters.forEach(param => {
+    if (param.type === undefined || param.type === FAILEDINFER) {
+      varTypeMap.set(param.name, FAILEDINFER)
+    }
+    else {
+      varTypeMap.set(param.name, param.type)  // this should mean a type annotation was given
+    }
+  })
+
+  // collect all local declarations, and give appropriate types
+  // first case: no type annotation. second case: type annotation
+  funDef.inits.forEach(decl => {
+    if (decl.declaredType === undefined || decl.declaredType === FAILEDINFER) {
+      varTypeMap.set(decl.name, FAILEDINFER)
+    }
+    else {
+      varTypeMap.set(decl.name, decl.declaredType)
+    }
+  })
+
+  // note: This should define
+
+  return varTypeMap
+}
+
+
+
+
+
 
 // First pass inference to reach into function body and infer return types
 // This is to get easy constraints.
