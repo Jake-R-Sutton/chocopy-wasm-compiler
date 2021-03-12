@@ -13,6 +13,8 @@ import {
 } from "./type-check";
 import { emptyEnv, GlobalEnv } from "./compiler";
 import * as BaseException from "./error";
+import { expr } from "cypress/types/jquery";
+import { emitWarning } from "process";
 
 /*
   Design choice: infer.ts will take an AST without type information, and add annotations where appropriate.
@@ -320,14 +322,6 @@ export function inferExprType(expr: Expr<any>, globEnv: GlobalTypeEnv, locEnv: L
 }
 
 
-// Annotates function definition in the AST, using local type inference.
-export function AnnotateFunDef(funDef: FunDef<any>, locEnv:LocalTypeEnv) : FunDef<Type> {
-
-  return funDef
-}
-
-// represents a constraint of two type variables t1 and t2
-type Constraint = [Type, Type]
 
 // traverses the function body and collects a mapping of all variable
 // names that occur in the function defintion
@@ -346,6 +340,7 @@ function collectVariables(funDef: FunDef<any>) : Map<string, Type> {
 
   // collect all local declarations, and give appropriate types
   // first case: no type annotation. second case: type annotation
+  // Note: currently assumes all local variable decls happen at the top
   funDef.inits.forEach(decl => {
     if (decl.declaredType === undefined || decl.declaredType === FAILEDINFER) {
       varTypeMap.set(decl.name, FAILEDINFER)
@@ -355,10 +350,303 @@ function collectVariables(funDef: FunDef<any>) : Map<string, Type> {
     }
   })
 
-  // note: This should define
-
+  // note: This should contain *all* variables that appear in a function body
+  // along with their most general type.
   return varTypeMap
 }
+
+
+function funIsTyped(funDef: FunDef<any>, typeVarMap: Map<string, Type>) : boolean {
+  let is_annotated : boolean = true
+
+  // give placeholder return type if no type annotation
+  if (funDef.ret === undefined) {
+    funDef.ret = FAILEDINFER
+    is_annotated = false
+  }
+
+  // easy case: full type annotations. Should be able to just annotate here
+  if (funDef.ret !== FAILEDINFER) { // function has a return type
+    let is_annotated : boolean = true
+    for (var VariableName in typeVarMap) {
+      if (typeVarMap.get(VariableName) === FAILEDINFER) {
+        is_annotated = false
+      }
+    }
+  }
+
+  return is_annotated
+}
+
+
+// Annotates function definition in the AST, using local type inference.
+export function AnnotateFunDefAST(funDef: FunDef<any>) : FunDef<Type> {
+  let typeVarMap = new Map<string, Type>()
+  let isTyped : boolean  // function return type and parameters are all provided
+
+  typeVarMap = collectVariables(funDef)  // represents 'variable/parameter x -> has type T'
+  isTyped = funIsTyped(funDef, typeVarMap)  // checks if all type annotations were provided
+
+
+  if (isTyped) {  // user provided type annotations. Nothing to do but annotate the function body
+    let typedStmtArr : Stmt<Type>[] = []
+    let _
+    let typedStmt : Stmt<Type>
+    let globEnv = emptyGlobalTypeEnv()  // pretty sure this doesn't get used
+    let locEnv = emptyLocalTypeEnv()
+    locEnv.topLevel = undefined
+    locEnv.vars = typeVarMap
+    locEnv.expectedRet = funDef.ret
+
+    // annotate the statements in the function body
+    funDef.body.forEach(stmt => {
+      [_, typedStmt] = annotateStmt(stmt, globEnv, locEnv, false)
+      typedStmtArr.push(typedStmt)
+    })
+
+    // update the function body with typed statements
+    funDef.body = typedStmtArr
+
+    return funDef
+  }
+  else {  // type annotation was missing somewhere. Inference needs to be done.
+    // do inference
+    // collect updated typeVarMap
+    // check if function parameter/local decls are fully unified
+    // If unified, return fully annotated funDef AST
+
+  }
+}
+
+// represents a constraint of two type variables t1 and t2
+type TypeVar = {tag:"concrete", type:Type} | {tag:"pointer", name:string}
+type ConstraintMap = Map<string, TypeVar[]>
+
+
+function literalTypeVar(lit: Literal) : TypeVar {
+  switch(lit.tag) {
+    case "bool":
+      return {tag:"concrete", type: BOOL}
+    case "num":
+      return {tag:"concrete", type:NUM}
+    case "string":
+      return {tag:"concrete", type:STRING}
+    case "none":
+      return {tag:"concrete", type:NONE}
+  }
+}
+
+// checks if a variable name occurs in an expression at any point.
+function occursCheckExpr(varName: string, expr: Expr<any>) : boolean {
+  switch(expr.tag) {
+    case "id":
+      return expr.name === varName
+    case "literal":
+      return false
+    case "uniop":
+      return occursCheckExpr(varName, expr.expr)
+    case "builtin2":
+    case "binop":
+      var leftOccurs = occursCheckExpr(varName, expr.left)
+      var rightOccurs = occursCheckExpr(varName, expr.right)
+      return leftOccurs || rightOccurs
+    case "builtin1":
+      return occursCheckExpr(varName, expr.arg)
+    case "call":  // is this right?
+      return expr.arguments.some(arg => occursCheckExpr(varName, arg))
+    case "method-call":
+      return expr.arguments.some(arg => occursCheckExpr(varName, arg))
+    case "lookup":
+      throw new Error ("Cannot do type inference on object fields")
+    default:
+      throw new Error ("Cannot do occurs check on expression of form " + expr.tag)
+
+  }
+}
+
+
+
+
+// this traverses an expression AST, adding constraints for a variable
+function collectExprConstraints(varName:string, expr: Expr<any>, constraintMap: ConstraintMap) : ConstraintMap {
+  switch(expr.tag) {
+    // base cases
+    case "id":
+      if (expr.name !== varName) {
+        var newPtr : TypeVar = {tag:'pointer', name:expr.name}
+        constraintMap.get(varName).push(newPtr)
+      }
+      if (expr.name === varName) {
+        var concreteFail : TypeVar = {tag:"concrete", type:FAILEDINFER}
+        if (!constraintMap.get(varName).includes(concreteFail)) {
+          constraintMap.get(varName).push(concreteFail)
+        }
+      }
+      return constraintMap
+
+    case "literal":
+      var newConcrete : TypeVar = literalTypeVar(expr.value)
+      if (!constraintMap.get(varName).includes(newConcrete)) {
+        constraintMap.get(varName).push(newConcrete)
+      }
+      return constraintMap
+
+    case "uniop":
+      constraintMap = collectExprConstraints(varName, expr.expr, constraintMap)
+      switch(expr.op) {
+        case UniOp.Neg:
+          var numConcrete : TypeVar = {tag:"concrete", type:NUM}
+          if (!constraintMap.get(varName).includes(numConcrete)) {
+            constraintMap.get(varName).push(numConcrete)
+          }
+          break
+        case UniOp.Not:
+          var boolConcrete : TypeVar = {tag:"concrete", type:BOOL}
+          if (!constraintMap.get(varName).includes(numConcrete)) {
+            constraintMap.get(varName).push(boolConcrete)
+          }
+          break
+      }
+      return constraintMap
+
+    case "builtin2":
+      if (occursCheckExpr(varName, expr.left)) {
+        constraintMap = collectExprConstraints(varName, expr.left, constraintMap)
+      }
+      if (occursCheckExpr(varName, expr.right)) {
+        constraintMap = collectExprConstraints(varName, expr.right, constraintMap)
+      }
+      return constraintMap
+
+    case "binop":
+      if (occursCheckExpr(varName, expr.left)) {
+        constraintMap = collectExprConstraints(varName, expr.left, constraintMap)
+      }
+      if (occursCheckExpr(varName, expr.right)) {
+        constraintMap = collectExprConstraints(varName, expr.right, constraintMap)
+      }
+      switch(expr.op) {
+        case BinOp.Plus: // polymorphic. We add a failed infer constraint
+        var concreteFail : TypeVar = {tag:"concrete", type:FAILEDINFER}
+        if (!constraintMap.get(varName).includes(concreteFail)) {
+          constraintMap.get(varName).push(concreteFail)
+        }
+      }
+      return constraintMap
+
+    case "builtin1":
+      if (occursCheckExpr(varName, expr.arg)) {
+        constraintMap = collectExprConstraints(varName, expr.arg, constraintMap)
+      }
+      return constraintMap
+
+    case "method-call":
+    case "call":
+      expr.arguments.forEach(arg => {
+        if (occursCheckExpr(varName, arg)) {
+          constraintMap = collectExprConstraints(varName, expr, constraintMap)
+        }
+      })
+    return constraintMap
+
+    default:
+      emitWarning("constraints not collected for expr of form " + expr.tag)
+      return constraintMap
+  }
+}
+
+function collectStmtConstraints(varName:string, stmt: Stmt<any>, constraintMap: ConstraintMap) : ConstraintMap {
+  switch(stmt.tag) {
+    case "assign":  // variable being assigned lhs, need constraints rhs
+      if (varName === stmt.name) {
+        constraintMap = collectExprConstraints(varName, stmt.value, constraintMap)
+      }
+      return constraintMap
+    case "expr":
+      if (occursCheckExpr(varName, stmt.expr)) {
+        constraintMap = collectExprConstraints(varName, stmt.expr, constraintMap)
+      }
+      return constraintMap
+    case "if":
+      if (occursCheckExpr(varName, stmt.cond)) {
+        constraintMap = collectExprConstraints(varName, stmt.cond, constraintMap)
+      }
+      stmt.thn.forEach(st => {
+        constraintMap = collectStmtConstraints(varName, st, constraintMap)
+      })
+      stmt.els.forEach(st => {
+        constraintMap = collectStmtConstraints(varName, st, constraintMap)
+      })
+      return constraintMap
+    case "while":
+      if (occursCheckExpr(varName, stmt.cond)) {
+        constraintMap = collectExprConstraints(varName, stmt.cond, constraintMap)
+      }
+      stmt.body.forEach(st => {
+        constraintMap = collectStmtConstraints(varName, st, constraintMap)
+      })
+      return constraintMap
+    case "return":
+      if (occursCheckExpr(varName, stmt.value)) {
+        constraintMap = collectExprConstraints(varName, stmt.value, constraintMap)
+      }
+      return constraintMap
+    case "pass":
+      return constraintMap
+    default:
+      emitWarning("No constraints collected on stmts of type " + stmt.tag)
+      return constraintMap
+  }
+}
+
+
+
+function unifyPair(t1 : TypeVar, t2 : TypeVar) : TypeVar {
+  if (t1.tag === "concrete" && t2.tag === "concrete") {
+    if (t1.type === t2.type) {
+      return {tag:"concrete", type:t1.type}
+    }
+    else {
+      return {tag: "concrete", type:UNSAT}
+    }
+  }
+  if (t1.tag === "pointer" && t2.tag === "pointer") {
+    return t2
+  }
+  if (t1.tag === "pointer" && t2.tag === "concrete") {
+    return t2
+  }
+  if (t1.tag === "concrete" && t2.tag === "pointer") {
+    return t1
+  }
+}
+
+// TODO: not finished.
+function unifyVariable(varName : string, constraintMap : ConstraintMap) : TypeVar {
+  let visited = []
+  let typeVars = constraintMap.get(varName)
+  let varType : TypeVar = {tag:"pointer", name:varName}
+  visited.push(varType)
+  // solve
+  return varType
+}
+
+
+function solveConstraints(constraintMap : ConstraintMap) : LocalTypeEnv {
+  let locEnv : LocalTypeEnv = emptyLocalTypeEnv()
+  let typeEnv = new Map<string, Type>()
+  constraintMap.forEach((typeVars: TypeVar[], varName: string) => {
+    let visited = []  // holds pointers
+    var typeVar : TypeVar = typeVars[0]
+    if (typeVars.length > 1) {  // 0 or 1 type var means we do nothing
+      typeVars.forEach(tvar => {
+        typeVar = unifyPair(typeVar, tvar)
+      })
+    }
+  })
+  return locEnv
+}
+
 
 
 
